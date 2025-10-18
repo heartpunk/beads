@@ -1130,11 +1130,17 @@ var showCmd = &cobra.Command{
 				fmt.Println(string(resp.Data))
 			} else {
 				// Parse response and use existing formatting code
+				type DependencyInfo struct {
+					ID       string  `json:"id"`
+					Title    *string `json:"title,omitempty"`
+					Priority *int    `json:"priority,omitempty"`
+					IsRemote bool    `json:"is_remote"`
+				}
 				type IssueDetails struct {
 					*types.Issue
-					Labels       []string       `json:"labels,omitempty"`
-					Dependencies []*types.Issue `json:"dependencies,omitempty"`
-					Dependents   []*types.Issue `json:"dependents,omitempty"`
+					Labels       []string          `json:"labels,omitempty"`
+					Dependencies []*DependencyInfo `json:"dependencies,omitempty"`
+					Dependents   []*types.Issue    `json:"dependents,omitempty"`
 				}
 				var details IssueDetails
 				if err := json.Unmarshal(resp.Data, &details); err != nil {
@@ -1144,7 +1150,7 @@ var showCmd = &cobra.Command{
 				issue := details.Issue
 
 				cyan := color.New(color.FgCyan).SprintFunc()
-				
+
 				// Format output (same as direct mode below)
 				tierEmoji := ""
 				statusSuffix := ""
@@ -1156,7 +1162,7 @@ var showCmd = &cobra.Command{
 				if issue.CompactionLevel > 0 {
 					statusSuffix = fmt.Sprintf(" (compacted L%d)", issue.CompactionLevel)
 				}
-				
+
 				fmt.Printf("\n%s: %s%s\n", cyan(issue.ID), issue.Title, tierEmoji)
 				fmt.Printf("Status: %s%s\n", issue.Status, statusSuffix)
 				fmt.Printf("Priority: P%d\n", issue.Priority)
@@ -1178,7 +1184,7 @@ var showCmd = &cobra.Command{
 						saved := issue.OriginalSize - currentSize
 						if saved > 0 {
 							reduction := float64(saved) / float64(issue.OriginalSize) * 100
-							fmt.Printf("📊 Original: %d bytes | Compressed: %d bytes (%.0f%% reduction)\n", 
+							fmt.Printf("📊 Original: %d bytes | Compressed: %d bytes (%.0f%% reduction)\n",
 								issue.OriginalSize, currentSize, reduction)
 						}
 					}
@@ -1210,10 +1216,18 @@ var showCmd = &cobra.Command{
 					fmt.Printf("\nLabels: %v\n", details.Labels)
 				}
 
+				// Show dependencies (supports cross-repo)
 				if len(details.Dependencies) > 0 {
+					gray := color.New(color.FgHiBlack).SprintFunc()
 					fmt.Printf("\nDepends on (%d):\n", len(details.Dependencies))
 					for _, dep := range details.Dependencies {
-						fmt.Printf("  → %s: %s [P%d]\n", dep.ID, dep.Title, dep.Priority)
+						if dep.IsRemote {
+							// Cross-repo dependency
+							fmt.Printf("  → %s %s\n", dep.ID, gray("(remote)"))
+						} else {
+							// Local dependency with full details
+							fmt.Printf("  → %s: %s [P%d]\n", dep.ID, *dep.Title, *dep.Priority)
+						}
 					}
 				}
 
@@ -1328,16 +1342,27 @@ var showCmd = &cobra.Command{
 			fmt.Printf("\nLabels: %v\n", labels)
 		}
 
-		// Show dependencies
-		deps, _ := store.GetDependencies(ctx, issue.ID)
-		if len(deps) > 0 {
-			fmt.Printf("\nDepends on (%d):\n", len(deps))
-			for _, dep := range deps {
-				fmt.Printf("  → %s: %s [P%d]\n", dep.ID, dep.Title, dep.Priority)
+		// Show dependencies (using GetDependencyRecords to support cross-repo)
+		depRecords, _ := store.GetDependencyRecords(ctx, issue.ID)
+		if len(depRecords) > 0 {
+			fmt.Printf("\nDepends on (%d):\n", len(depRecords))
+			for _, dep := range depRecords {
+				// Try to fetch the dependency as a local issue
+				depIssue, err := store.GetIssue(ctx, dep.DependsOnID)
+				if err == nil && depIssue != nil {
+					// Local dependency - show full details
+					fmt.Printf("  → %s: %s [P%d]\n", depIssue.ID, depIssue.Title, depIssue.Priority)
+				} else {
+					// Cross-repo dependency - show qualified ID with marker
+					gray := color.New(color.FgHiBlack).SprintFunc()
+					fmt.Printf("  → %s %s\n", dep.DependsOnID, gray("(remote)"))
+				}
 			}
 		}
 
-		// Show dependents
+		// Show dependents (issues that depend on this one)
+		// Note: GetDependents only returns local dependents
+		// For cross-repo dependents, we'd need to query remote databases
 		dependents, _ := store.GetDependents(ctx, issue.ID)
 		if len(dependents) > 0 {
 			fmt.Printf("\nBlocks (%d):\n", len(dependents))

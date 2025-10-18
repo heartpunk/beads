@@ -408,7 +408,49 @@ func (s *Server) handleShow(req *Request) Response {
 		}
 	}
 
-	data, _ := json.Marshal(issue)
+	// Include labels, dependencies, and dependents in response
+	// DependencyInfo holds either a resolved local issue or a cross-repo ID string
+	type DependencyInfo struct {
+		ID       string  `json:"id"`
+		Title    *string `json:"title,omitempty"`    // nil for cross-repo
+		Priority *int    `json:"priority,omitempty"` // nil for cross-repo
+		IsRemote bool    `json:"is_remote"`
+	}
+
+	type IssueDetails struct {
+		*types.Issue
+		Labels       []string          `json:"labels,omitempty"`
+		Dependencies []*DependencyInfo `json:"dependencies,omitempty"`
+		Dependents   []*types.Issue    `json:"dependents,omitempty"`
+	}
+
+	details := &IssueDetails{Issue: issue}
+	details.Labels, _ = s.storage.GetLabels(ctx, issue.ID)
+	details.Dependents, _ = s.storage.GetDependents(ctx, issue.ID)
+
+	// Resolve dependencies - try to fetch local, mark as remote if not found
+	depRecords, _ := s.storage.GetDependencyRecords(ctx, issue.ID)
+	details.Dependencies = make([]*DependencyInfo, 0, len(depRecords))
+	for _, dep := range depRecords {
+		depIssue, err := s.storage.GetIssue(ctx, dep.DependsOnID)
+		if err == nil && depIssue != nil {
+			// Local dependency - include full details
+			details.Dependencies = append(details.Dependencies, &DependencyInfo{
+				ID:       depIssue.ID,
+				Title:    &depIssue.Title,
+				Priority: &depIssue.Priority,
+				IsRemote: false,
+			})
+		} else {
+			// Cross-repo dependency - just the ID
+			details.Dependencies = append(details.Dependencies, &DependencyInfo{
+				ID:       dep.DependsOnID,
+				IsRemote: true,
+			})
+		}
+	}
+
+	data, _ := json.Marshal(details)
 	return Response{
 		Success: true,
 		Data:    data,
