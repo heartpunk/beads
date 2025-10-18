@@ -153,12 +153,25 @@ var blockedCmd = &cobra.Command{
 		}
 
 		red := color.New(color.FgRed).SprintFunc()
+		gray := color.New(color.FgHiBlack).SprintFunc()
 		fmt.Printf("\n%s Blocked issues (%d):\n\n", red("🚫"), len(blocked))
 
 		for _, issue := range blocked {
 			fmt.Printf("[P%d] %s: %s\n", issue.Priority, issue.ID, issue.Title)
-			fmt.Printf("  Blocked by %d open dependencies: %v\n",
-				issue.BlockedByCount, issue.BlockedBy)
+			fmt.Printf("  Blocked by %d open dependencies:\n", issue.BlockedByCount)
+
+			// Display each blocker, marking cross-repo deps as (remote)
+			for _, blockerID := range issue.BlockedBy {
+				// Check if blocker exists locally
+				blockerIssue, err := store.GetIssue(ctx, blockerID)
+				if err == nil && blockerIssue != nil {
+					// Local blocker - show with title
+					fmt.Printf("    → %s: %s\n", blockerID, blockerIssue.Title)
+				} else {
+					// Cross-repo blocker - show with (remote) marker
+					fmt.Printf("    → %s %s\n", blockerID, gray("(remote)"))
+				}
+			}
 			fmt.Println()
 		}
 	},
