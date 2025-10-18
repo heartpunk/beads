@@ -18,6 +18,17 @@ var readyCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		limit, _ := cmd.Flags().GetInt("limit")
 		assignee, _ := cmd.Flags().GetString("assignee")
+		allRepos, _ := cmd.Flags().GetBool("all-repos")
+		repoList, _ := cmd.Flags().GetString("repos")
+
+		// Multi-repo queries not yet fully implemented
+		if allRepos || repoList != "" {
+			yellow := color.New(color.FgYellow).SprintFunc()
+			fmt.Fprintf(os.Stderr, "\n%s Multi-repo queries are not yet fully implemented.\n", yellow("⚠"))
+			fmt.Fprintf(os.Stderr, "Cross-repo dependencies are now properly handled in single-repo queries.\n")
+			fmt.Fprintf(os.Stderr, "Full multi-repo support coming soon (tracked in beads-6).\n\n")
+			os.Exit(1)
+		}
 
 		filter := types.WorkFilter{
 			Status: types.StatusOpen,
@@ -215,6 +226,8 @@ func init() {
 	readyCmd.Flags().IntP("limit", "n", 10, "Maximum issues to show")
 	readyCmd.Flags().IntP("priority", "p", 0, "Filter by priority")
 	readyCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
+	readyCmd.Flags().Bool("all-repos", false, "Query all registered repositories (not yet implemented)")
+	readyCmd.Flags().String("repos", "", "Query specific repositories (comma-separated, not yet implemented)")
 
 	rootCmd.AddCommand(readyCmd)
 	rootCmd.AddCommand(blockedCmd)
