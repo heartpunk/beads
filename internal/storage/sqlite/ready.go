@@ -44,7 +44,7 @@ func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilte
 
 	// Query with recursive CTE to propagate blocking through parent-child hierarchy
 	// Algorithm:
-	// 1. Find issues directly blocked by 'blocks' dependencies
+	// 1. Find issues directly blocked by 'blocks' dependencies (both local and cross-repo)
 	// 2. Recursively propagate blockage to all descendants via 'parent-child' links
 	// 3. Exclude all blocked issues (both direct and transitive) from ready work
 	query := fmt.Sprintf(`
@@ -53,9 +53,15 @@ func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilte
 		  blocked_directly AS (
 		    SELECT DISTINCT d.issue_id
 		    FROM dependencies d
-		    JOIN issues blocker ON d.depends_on_id = blocker.id
+		    LEFT JOIN issues blocker ON d.depends_on_id = blocker.id
 		    WHERE d.type = 'blocks'
-		      AND blocker.status IN ('open', 'in_progress', 'blocked')
+		      AND (
+		        -- Local blocker that's still open
+		        (blocker.id IS NOT NULL AND blocker.status IN ('open', 'in_progress', 'blocked'))
+		        OR
+		        -- Cross-repo blocker (assume it's blocking since we can't verify)
+		        (blocker.id IS NULL AND d.depends_on_id != '')
+		      )
 		  ),
 
 		  -- Step 2: Propagate blockage to all descendants via parent-child
@@ -96,9 +102,10 @@ func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilte
 	return scanIssues(rows)
 }
 
-// GetBlockedIssues returns issues that are blocked by dependencies
+// GetBlockedIssues returns issues that are blocked by dependencies (local or cross-repo)
 func (s *SQLiteStorage) GetBlockedIssues(ctx context.Context) ([]*types.BlockedIssue, error) {
 	// Use GROUP_CONCAT to get all blocker IDs in a single query (no N+1)
+	// LEFT JOIN to include cross-repo blockers that don't exist locally
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 		    i.id, i.title, i.description, i.design, i.acceptance_criteria, i.notes,
@@ -108,10 +115,16 @@ func (s *SQLiteStorage) GetBlockedIssues(ctx context.Context) ([]*types.BlockedI
 		    GROUP_CONCAT(d.depends_on_id, ',') as blocker_ids
 		FROM issues i
 		JOIN dependencies d ON i.id = d.issue_id
-		JOIN issues blocker ON d.depends_on_id = blocker.id
+		LEFT JOIN issues blocker ON d.depends_on_id = blocker.id
 		WHERE i.status IN ('open', 'in_progress', 'blocked')
 		  AND d.type = 'blocks'
-		  AND blocker.status IN ('open', 'in_progress', 'blocked')
+		  AND (
+		    -- Local blocker that's still open
+		    (blocker.id IS NOT NULL AND blocker.status IN ('open', 'in_progress', 'blocked'))
+		    OR
+		    -- Cross-repo blocker (assume it's blocking since we can't verify)
+		    (blocker.id IS NULL AND d.depends_on_id != '')
+		  )
 		GROUP BY i.id
 		ORDER BY i.priority ASC
 	`)
