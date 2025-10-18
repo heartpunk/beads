@@ -863,22 +863,30 @@ func createIssuesFromMarkdown(cmd *cobra.Command, filepath string) {
 			var dependsOnID string
 
 			// Parse format: "type:id" or just "id" (defaults to "blocks")
+			// Need to distinguish between dependency type prefix and qualified ID prefix
 			if strings.Contains(depSpec, ":") {
 				parts := strings.SplitN(depSpec, ":", 2)
-				if len(parts) != 2 {
+				if len(parts) == 2 {
+					// Check if first part is a valid dependency type
+					possibleType := types.DependencyType(strings.TrimSpace(parts[0]))
+					if possibleType.IsValid() {
+						// It's a "type:id" format
+						depType = possibleType
+						dependsOnID = strings.TrimSpace(parts[1])
+					} else {
+						// It's a qualified ID like "api:bd-5" or "gh:user/repo:bd-3"
+						// Default to "blocks" type
+						depType = types.DepBlocks
+						dependsOnID = depSpec
+					}
+				} else {
 					fmt.Fprintf(os.Stderr, "Warning: invalid dependency format '%s' for %s\n", depSpec, issue.ID)
 					continue
 				}
-				depType = types.DependencyType(strings.TrimSpace(parts[0]))
-				dependsOnID = strings.TrimSpace(parts[1])
 			} else {
+				// Default to "blocks" if no colon at all
 				depType = types.DepBlocks
 				dependsOnID = depSpec
-			}
-
-			if !depType.IsValid() {
-				fmt.Fprintf(os.Stderr, "Warning: invalid dependency type '%s' for %s\n", depType, issue.ID)
-				continue
 			}
 
 			dep := &types.Dependency{
@@ -1040,6 +1048,7 @@ var createCmd = &cobra.Command{
 		}
 
 		// Add dependencies if specified (format: type:id or just id for default "blocks" type)
+		// Note: id can be a qualified ID like "api:bd-5" or "gh:user/repo:bd-3"
 		for _, depSpec := range deps {
 			// Skip empty specs (e.g., from trailing commas)
 			depSpec = strings.TrimSpace(depSpec)
@@ -1051,24 +1060,30 @@ var createCmd = &cobra.Command{
 			var dependsOnID string
 
 			// Parse format: "type:id" or just "id" (defaults to "blocks")
+			// Need to distinguish between dependency type prefix and qualified ID prefix
 			if strings.Contains(depSpec, ":") {
 				parts := strings.SplitN(depSpec, ":", 2)
-				if len(parts) != 2 {
-					fmt.Fprintf(os.Stderr, "Warning: invalid dependency format '%s', expected 'type:id' or 'id'\n", depSpec)
+				if len(parts) == 2 {
+					// Check if first part is a valid dependency type
+					possibleType := types.DependencyType(strings.TrimSpace(parts[0]))
+					if possibleType.IsValid() {
+						// It's a "type:id" format
+						depType = possibleType
+						dependsOnID = strings.TrimSpace(parts[1])
+					} else {
+						// It's a qualified ID like "api:bd-5" or "gh:user/repo:bd-3"
+						// Default to "blocks" type
+						depType = types.DepBlocks
+						dependsOnID = depSpec
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "Warning: invalid dependency format '%s'\n", depSpec)
 					continue
 				}
-				depType = types.DependencyType(strings.TrimSpace(parts[0]))
-				dependsOnID = strings.TrimSpace(parts[1])
 			} else {
-				// Default to "blocks" if no type specified
+				// Default to "blocks" if no colon at all
 				depType = types.DepBlocks
 				dependsOnID = depSpec
-			}
-
-			// Validate dependency type
-			if !depType.IsValid() {
-				fmt.Fprintf(os.Stderr, "Warning: invalid dependency type '%s' (valid: blocks, related, parent-child, discovered-from)\n", depType)
-				continue
 			}
 
 			// Add the dependency
