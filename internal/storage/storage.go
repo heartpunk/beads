@@ -62,6 +62,20 @@ type Storage interface {
 	RenameDependencyPrefix(ctx context.Context, oldPrefix, newPrefix string) error
 	RenameCounterPrefix(ctx context.Context, oldPrefix, newPrefix string) error
 
+	// Repositories (for cross-repo dependencies)
+	AddRepository(ctx context.Context, name, description string) error
+	GetRepository(ctx context.Context, name string) (*types.Repository, error)
+	ListRepositories(ctx context.Context) ([]*types.Repository, error)
+	RemoveRepository(ctx context.Context, name string) error
+	UpdateRepositorySync(ctx context.Context, name string) error
+
+	// Repository Remotes
+	AddRepositoryRemote(ctx context.Context, repoName, remoteType, remoteValue string, isPrimary bool) error
+	GetRepositoryRemotes(ctx context.Context, repoName string) ([]*types.RepositoryRemote, error)
+	RemoveRepositoryRemote(ctx context.Context, id int) error
+	FindRepositoryByRemote(ctx context.Context, remoteType, remoteValue string) (string, bool, error)
+	SetPrimaryRemote(ctx context.Context, id int) error
+
 	// Lifecycle
 	Close() error
 }

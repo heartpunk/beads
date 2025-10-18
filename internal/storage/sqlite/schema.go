@@ -141,6 +141,31 @@ CREATE TABLE IF NOT EXISTS compaction_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_comp_snap_issue_level_created ON compaction_snapshots(issue_id, compaction_level, created_at DESC);
 
+-- Repositories table (for cross-repo dependencies)
+CREATE TABLE IF NOT EXISTS repositories (
+    name TEXT PRIMARY KEY,
+    description TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_synced DATETIME
+);
+
+-- Repository remotes table (many-to-many: repos can have multiple remotes)
+-- Allows correlating local repos to GitHub/GitLab/etc remotes
+CREATE TABLE IF NOT EXISTS repository_remotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_name TEXT NOT NULL,
+    remote_type TEXT NOT NULL,    -- 'local-path', 'github', 'gitlab', 'git-url'
+    remote_value TEXT NOT NULL,   -- path/URL or shorthand (e.g., 'user/repo' for GitHub)
+    is_primary INTEGER DEFAULT 0, -- SQLite uses INTEGER for BOOLEAN (0=false, 1=true)
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (repo_name) REFERENCES repositories(name) ON DELETE CASCADE,
+    UNIQUE(repo_name, remote_type, remote_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_remotes_name ON repository_remotes(repo_name);
+CREATE INDEX IF NOT EXISTS idx_repo_remotes_type ON repository_remotes(remote_type);
+CREATE INDEX IF NOT EXISTS idx_repo_remotes_value ON repository_remotes(remote_value);
+
 -- Ready work view (with hierarchical blocking)
 -- Uses recursive CTE to propagate blocking through parent-child hierarchy
 CREATE VIEW IF NOT EXISTS ready_issues AS
