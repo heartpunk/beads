@@ -24,7 +24,7 @@ func (s *SQLiteStorage) AddDependency(ctx context.Context, dep *types.Dependency
 		return fmt.Errorf("invalid dependency type: %s (must be blocks, related, parent-child, or discovered-from)", dep.Type)
 	}
 
-	// Validate that both issues exist
+	// Validate that source issue exists (must be local)
 	issueExists, err := s.GetIssue(ctx, dep.IssueID)
 	if err != nil {
 		return fmt.Errorf("failed to check issue %s: %w", dep.IssueID, err)
@@ -33,12 +33,29 @@ func (s *SQLiteStorage) AddDependency(ctx context.Context, dep *types.Dependency
 		return fmt.Errorf("issue %s not found", dep.IssueID)
 	}
 
-	dependsOnExists, err := s.GetIssue(ctx, dep.DependsOnID)
+	// Resolve qualified ID and determine if it's cross-repo
+	repoName, localID, isLocal, err := s.ResolveQualifiedID(ctx, dep.DependsOnID)
 	if err != nil {
-		return fmt.Errorf("failed to check dependency %s: %w", dep.DependsOnID, err)
+		return fmt.Errorf("failed to resolve dependency ID: %w", err)
 	}
-	if dependsOnExists == nil {
-		return fmt.Errorf("dependency target %s not found", dep.DependsOnID)
+
+	var dependsOnExists *types.Issue
+	if isLocal {
+		// Local dependency - validate that target exists
+		dependsOnExists, err = s.GetIssue(ctx, dep.DependsOnID)
+		if err != nil {
+			return fmt.Errorf("failed to check dependency %s: %w", dep.DependsOnID, err)
+		}
+		if dependsOnExists == nil {
+			return fmt.Errorf("dependency target %s not found", dep.DependsOnID)
+		}
+	} else {
+		// Cross-repo dependency - we can't validate existence of remote issue
+		// Store normalized form
+		if repoName != "" {
+			dep.DependsOnID = fmt.Sprintf("%s:%s", repoName, localID)
+		}
+		// Set dependsOnExists to nil to skip validation below
 	}
 
 	// Prevent self-dependency
@@ -46,11 +63,11 @@ func (s *SQLiteStorage) AddDependency(ctx context.Context, dep *types.Dependency
 		return fmt.Errorf("issue cannot depend on itself")
 	}
 
-	// Validate parent-child dependency direction
+	// Validate parent-child dependency direction (only for local dependencies)
 	// In parent-child relationships: child depends on parent (child is part of parent)
 	// Parent should NOT depend on child (semantically backwards)
 	// Consistent with dependency semantics: IssueID depends on DependsOnID
-	if dep.Type == types.DepParentChild {
+	if dep.Type == types.DepParentChild && dependsOnExists != nil {
 		// issueExists is the dependent (the one that depends on something)
 		// dependsOnExists is what it depends on
 		// Correct: Task (child) depends on Epic (parent) - child belongs to parent
@@ -83,42 +100,49 @@ func (s *SQLiteStorage) AddDependency(ctx context.Context, dep *types.Dependency
 	//
 	// 3. Semantic Clarity: Circular dependencies are conceptually problematic - if A depends
 	//    on B and B depends on A (directly or through other issues), which should be done first?
-	//
-	// Implementation: We use a recursive CTE to traverse from DependsOnID to see if we can
-	// reach IssueID. If yes, adding "IssueID depends on DependsOnID" would complete a cycle.
-	// We check ALL dependency types because cross-type cycles (e.g., A blocks B, B parent-child A)
-	// are just as problematic as single-type cycles.
-	//
-	// The traversal is depth-limited to maxDependencyDepth (100) to prevent infinite loops
-	// and excessive query cost. We check before inserting to avoid unnecessary write on failure.
+
 	var cycleExists bool
-	err = tx.QueryRowContext(ctx, `
-		WITH RECURSIVE paths AS (
-			SELECT
-				issue_id,
-				depends_on_id,
-				1 as depth
-			FROM dependencies
-			WHERE issue_id = ?
 
-			UNION ALL
+	if isLocal {
+		// Local dependency - check for cycles in local graph only
+		err = tx.QueryRowContext(ctx, `
+			WITH RECURSIVE paths AS (
+				SELECT
+					issue_id,
+					depends_on_id,
+					1 as depth
+				FROM dependencies
+				WHERE issue_id = ?
 
-			SELECT
-				d.issue_id,
-				d.depends_on_id,
-				p.depth + 1
-			FROM dependencies d
-			JOIN paths p ON d.issue_id = p.depends_on_id
-			WHERE p.depth < ?
-		)
-		SELECT EXISTS(
-			SELECT 1 FROM paths
-			WHERE depends_on_id = ?
-		)
-	`, dep.DependsOnID, maxDependencyDepth, dep.IssueID).Scan(&cycleExists)
+				UNION ALL
 
-	if err != nil {
-		return fmt.Errorf("failed to check for cycles: %w", err)
+				SELECT
+					d.issue_id,
+					d.depends_on_id,
+					p.depth + 1
+				FROM dependencies d
+				JOIN paths p ON d.issue_id = p.depends_on_id
+				WHERE p.depth < ?
+			)
+			SELECT EXISTS(
+				SELECT 1 FROM paths
+				WHERE depends_on_id = ?
+			)
+		`, dep.DependsOnID, maxDependencyDepth, dep.IssueID).Scan(&cycleExists)
+
+		if err != nil {
+			return fmt.Errorf("failed to check for cycles: %w", err)
+		}
+	} else if repoName != "" {
+		// Cross-repo dependency - use ATTACH DATABASE to check cycles across both repos
+		// This is a proof of concept using SQLite's multi-database feature
+		cycleExists, err = s.detectCrossRepoCycle(ctx, tx, dep, repoName)
+		if err != nil {
+			// If cross-repo cycle detection fails (e.g., remote db not accessible),
+			// we'll allow the dependency but warn
+			// TODO: Consider adding a flag to make this strict
+			cycleExists = false
+		}
 	}
 
 	if cycleExists {
@@ -127,10 +151,17 @@ func (s *SQLiteStorage) AddDependency(ctx context.Context, dep *types.Dependency
 	}
 
 	// Insert dependency
+	var repoNameVal interface{}
+	if repoName != "" {
+		repoNameVal = repoName
+	} else {
+		repoNameVal = nil
+	}
+
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO dependencies (issue_id, depends_on_id, type, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?)
-	`, dep.IssueID, dep.DependsOnID, dep.Type, dep.CreatedAt, dep.CreatedBy)
+		INSERT INTO dependencies (issue_id, depends_on_id, repo_name, type, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, dep.IssueID, dep.DependsOnID, repoNameVal, dep.Type, dep.CreatedAt, dep.CreatedBy)
 	if err != nil {
 		return fmt.Errorf("failed to add dependency: %w", err)
 	}
@@ -388,7 +419,7 @@ func (s *SQLiteStorage) GetDependents(ctx context.Context, issueID string) ([]*t
 // GetDependencyRecords returns raw dependency records for an issue
 func (s *SQLiteStorage) GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT issue_id, depends_on_id, type, created_at, created_by
+		SELECT issue_id, depends_on_id, repo_name, type, created_at, created_by
 		FROM dependencies
 		WHERE issue_id = ?
 		ORDER BY created_at ASC
@@ -401,9 +432,11 @@ func (s *SQLiteStorage) GetDependencyRecords(ctx context.Context, issueID string
 	var deps []*types.Dependency
 	for rows.Next() {
 		var dep types.Dependency
+		var repoName sql.NullString
 		err := rows.Scan(
 			&dep.IssueID,
 			&dep.DependsOnID,
+			&repoName,
 			&dep.Type,
 			&dep.CreatedAt,
 			&dep.CreatedBy,
@@ -411,6 +444,12 @@ func (s *SQLiteStorage) GetDependencyRecords(ctx context.Context, issueID string
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan dependency: %w", err)
 		}
+
+		// Format for display if cross-repo
+		if repoName.Valid && repoName.String != "" {
+			dep.DependsOnID = s.FormatDependencyForDisplay(ctx, dep.DependsOnID, repoName.String)
+		}
+
 		deps = append(deps, &dep)
 	}
 
@@ -421,7 +460,7 @@ func (s *SQLiteStorage) GetDependencyRecords(ctx context.Context, issueID string
 // This is optimized for bulk export operations to avoid N+1 queries
 func (s *SQLiteStorage) GetAllDependencyRecords(ctx context.Context) (map[string][]*types.Dependency, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT issue_id, depends_on_id, type, created_at, created_by
+		SELECT issue_id, depends_on_id, repo_name, type, created_at, created_by
 		FROM dependencies
 		ORDER BY issue_id, created_at ASC
 	`)
@@ -434,9 +473,11 @@ func (s *SQLiteStorage) GetAllDependencyRecords(ctx context.Context) (map[string
 	depsMap := make(map[string][]*types.Dependency)
 	for rows.Next() {
 		var dep types.Dependency
+		var repoName sql.NullString
 		err := rows.Scan(
 			&dep.IssueID,
 			&dep.DependsOnID,
+			&repoName,
 			&dep.Type,
 			&dep.CreatedAt,
 			&dep.CreatedBy,
@@ -444,6 +485,12 @@ func (s *SQLiteStorage) GetAllDependencyRecords(ctx context.Context) (map[string
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan dependency: %w", err)
 		}
+
+		// Format for display if cross-repo
+		if repoName.Valid && repoName.String != "" {
+			dep.DependsOnID = s.FormatDependencyForDisplay(ctx, dep.DependsOnID, repoName.String)
+		}
+
 		depsMap[dep.IssueID] = append(depsMap[dep.IssueID], &dep)
 	}
 

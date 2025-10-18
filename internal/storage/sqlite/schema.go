@@ -30,21 +30,23 @@ CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
 CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(assignee);
 CREATE INDEX IF NOT EXISTS idx_issues_created_at ON issues(created_at);
 
--- Dependencies table
+-- Dependencies table (supports cross-repo dependencies)
 CREATE TABLE IF NOT EXISTS dependencies (
     issue_id TEXT NOT NULL,
-    depends_on_id TEXT NOT NULL,
+    depends_on_id TEXT NOT NULL,         -- Can be local "bd-5" or qualified "api:bd-5"
+    repo_name TEXT,                      -- NULL for local, repo name for cross-repo
     type TEXT NOT NULL DEFAULT 'blocks',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT NOT NULL,
     PRIMARY KEY (issue_id, depends_on_id),
-    FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE,
-    FOREIGN KEY (depends_on_id) REFERENCES issues(id) ON DELETE CASCADE
+    FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+    -- Note: No FK on depends_on_id - it may reference remote repo
 );
 
 CREATE INDEX IF NOT EXISTS idx_dependencies_issue ON dependencies(issue_id);
 CREATE INDEX IF NOT EXISTS idx_dependencies_depends_on ON dependencies(depends_on_id);
 CREATE INDEX IF NOT EXISTS idx_dependencies_depends_on_type ON dependencies(depends_on_id, type);
+CREATE INDEX IF NOT EXISTS idx_dependencies_repo ON dependencies(repo_name);
 
 -- Labels table
 CREATE TABLE IF NOT EXISTS labels (
