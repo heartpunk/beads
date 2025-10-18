@@ -1123,13 +1123,13 @@ func init() {
 	createCmd.Flags().StringSliceP("labels", "l", []string{}, "Labels (comma-separated)")
 	createCmd.Flags().String("id", "", "Explicit issue ID (e.g., 'bd-42' for partitioning)")
 	createCmd.Flags().String("external-ref", "", "External reference (e.g., 'gh-9', 'jira-ABC')")
-	createCmd.Flags().StringSlice("deps", []string{}, "Dependencies in format 'type:id' or 'id' (e.g., 'discovered-from:bd-20,blocks:bd-15' or 'bd-20')")
+	createCmd.Flags().StringSlice("deps", []string{}, "Dependencies: 'bd-5', 'api:bd-10', 'blocks:bd-3', 'gh:user/repo:bd-7' (supports cross-repo)")
 	rootCmd.AddCommand(createCmd)
 }
 
 var showCmd = &cobra.Command{
 	Use:   "show [id]",
-	Short: "Show issue details",
+	Short: "Show issue details (includes cross-repo dependencies)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		// If daemon is running, use RPC

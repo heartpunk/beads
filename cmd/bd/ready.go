@@ -14,7 +14,7 @@ import (
 
 var readyCmd = &cobra.Command{
 	Use:   "ready",
-	Short: "Show ready work (no blockers)",
+	Short: "Show ready work (no blockers, includes cross-repo deps)",
 	Run: func(cmd *cobra.Command, args []string) {
 		limit, _ := cmd.Flags().GetInt("limit")
 		assignee, _ := cmd.Flags().GetString("assignee")
@@ -139,7 +139,7 @@ var readyCmd = &cobra.Command{
 
 var blockedCmd = &cobra.Command{
 	Use:   "blocked",
-	Short: "Show blocked issues",
+	Short: "Show blocked issues (includes cross-repo blockers)",
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 		blocked, err := store.GetBlockedIssues(ctx)

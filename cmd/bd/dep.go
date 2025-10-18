@@ -18,7 +18,7 @@ var depCmd = &cobra.Command{
 
 var depAddCmd = &cobra.Command{
 	Use:   "add [issue-id] [depends-on-id]",
-	Short: "Add a dependency",
+	Short: "Add a dependency (supports cross-repo: api:bd-5, gh:user/repo:bd-3)",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		depType, _ := cmd.Flags().GetString("type")
