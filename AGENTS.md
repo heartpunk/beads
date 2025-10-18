@@ -343,3 +343,16 @@ See `scripts/README.md` for more details.
 **Remember**: We're building this tool to help AI agents like you! If you find the workflow confusing or have ideas for improvement, create an issue with your feedback.
 
 Happy coding! 🔗
+
+
+## Issue Tracking
+
+We use bd (beads) for issue tracking instead of Markdown TODOs.
+
+Quick commands:
+- `bd ready --json` - Find unblocked work
+- `bd create "Task" -p 1 -t task` - Create issue
+- `bd update <id> --status in_progress` - Start work
+- `bd close <id> --reason "Done"` - Complete work
+
+See https://github.com/steveyegge/beads for full docs.
